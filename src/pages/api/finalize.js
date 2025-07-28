@@ -3,17 +3,25 @@ import { createCanvas, loadImage } from 'canvas';
 import fs from 'fs';
 import path from 'path';
 
-// Helper function to load image from file path
+// Helper function to load image from file path or base64
 function loadImageFromPath(imagePath) {
   if (imagePath.startsWith('/api/temp/')) {
     const pathParts = imagePath.split('/');
     const sessionId = pathParts[3];
     const filename = pathParts[4];
-    const fullPath = path.join(process.cwd(), 'temp', sessionId, filename);
-    return fs.readFileSync(fullPath);
-  } else {
+    const fullPath = path.join('/tmp', sessionId, filename);
+    
+    try {
+      return fs.readFileSync(fullPath);
+    } catch (err) {
+      console.error('Failed to read temp file:', err);
+      throw new Error('Temp file not found - please regenerate');
+    }
+  } else if (imagePath.startsWith('data:image/')) {
     // Handle base64 data URLs (fallback)
     return Buffer.from(imagePath.split(',')[1], 'base64');
+  } else {
+    throw new Error('Invalid image path format');
   }
 }
 
@@ -93,9 +101,9 @@ export default async function handler(req, res) {
     const assetsFolder = zip.folder('Assets.xcassets');
     const appIconFolder = assetsFolder.folder('AppIcon.appiconset');
     
-    // Transform each layer
+    // Transform each layer (backgrounds don't get adjustments)
     console.log('Processing background...');
-    const backgroundBuffer = await transformLayer(images.background, null); // No adjustments for background
+    const backgroundBuffer = await transformLayer(images.background, null);
     
     console.log('Processing layer1...');
     const layer1Buffer = await transformLayer(images.layer1, adjustments.layer1);
@@ -194,11 +202,11 @@ Generated: ${new Date().toISOString()}
     console.log('Generating ZIP...');
     const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
 
-    // Cleanup temp files
+    // Cleanup temp files (if using /tmp)
     if (images.background.startsWith('/api/temp/')) {
       try {
         const sessionId = images.background.split('/')[3];
-        const tempDir = path.join(process.cwd(), 'temp', sessionId);
+        const tempDir = path.join('/tmp', sessionId);
         if (fs.existsSync(tempDir)) {
           fs.rmSync(tempDir, { recursive: true });
           console.log('Cleaned up temp files');

@@ -35,7 +35,7 @@ async function generateLayer(text, removeBg = false, openaiApiKey, clipdropApiKe
   const openai = new OpenAI({ apiKey: openaiApiKey });
   
   const resp = await openai.images.generate({
-    model: 'dall-e-3',
+    model: 'gpt-image-1',
     prompt: text,
     n: 1,
     size: '1024x1024',
@@ -143,26 +143,49 @@ export default async function handler(req, res) {
       const foregroundBuffer = await generateLayer(prompts.foreground, true, openaiApiKey, clipdropApiKey);
 
       if (isPreview) {
-        // Save to temp files instead of returning base64
+        // For Vercel deployment, use /tmp directory and return base64
         const sessionId = uuidv4();
-        const tempDir = path.join(process.cwd(), 'temp', sessionId);
+        const tempDir = path.join('/tmp', sessionId);
         
-        // Create temp directory
-        if (!fs.existsSync(tempDir)) {
-          fs.mkdirSync(tempDir, { recursive: true });
+        // Create temp directory in /tmp (Vercel writable directory)
+        try {
+          if (!fs.existsSync('/tmp')) {
+            fs.mkdirSync('/tmp', { recursive: true });
+          }
+          if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+          }
+        } catch (err) {
+          console.error('Directory creation error:', err);
+          // Fall back to base64 if file system fails
+          return res.json({
+            sessionId,
+            background: `data:image/png;base64,${backgroundBuffer.toString('base64')}`,
+            layer1: `data:image/png;base64,${foregroundBuffer.toString('base64')}`
+          });
         }
         
-        // Save files
-        fs.writeFileSync(path.join(tempDir, 'background.png'), backgroundBuffer);
-        fs.writeFileSync(path.join(tempDir, 'layer1.png'), foregroundBuffer);
-        
-        console.log(`Generated images saved to session: ${sessionId}`);
-        
-        return res.json({
-          sessionId,
-          background: `/api/temp/${sessionId}/background.png`,
-          layer1: `/api/temp/${sessionId}/layer1.png`
-        });
+        try {
+          // Save files to /tmp
+          fs.writeFileSync(path.join(tempDir, 'background.png'), backgroundBuffer);
+          fs.writeFileSync(path.join(tempDir, 'layer1.png'), foregroundBuffer);
+          
+          console.log(`Generated images saved to session: ${sessionId}`);
+          
+          return res.json({
+            sessionId,
+            background: `/api/temp/${sessionId}/background.png`,
+            layer1: `/api/temp/${sessionId}/layer1.png`
+          });
+        } catch (err) {
+          console.error('File write error:', err);
+          // Fall back to base64
+          return res.json({
+            sessionId,
+            background: `data:image/png;base64,${backgroundBuffer.toString('base64')}`,
+            layer1: `data:image/png;base64,${foregroundBuffer.toString('base64')}`
+          });
+        }
       } else {
         // Return ZIP (legacy mode)
         const zip = new JSZip();
@@ -216,32 +239,51 @@ export default async function handler(req, res) {
       }
 
       if (isPreview) {
-        // Save to temp files
+        // For Vercel deployment, use /tmp directory and return base64
         const sessionId = uuidv4();
-        const tempDir = path.join(process.cwd(), 'temp', sessionId);
+        const tempDir = path.join('/tmp', sessionId);
         
-        if (!fs.existsSync(tempDir)) {
-          fs.mkdirSync(tempDir, { recursive: true });
+        try {
+          if (!fs.existsSync('/tmp')) {
+            fs.mkdirSync('/tmp', { recursive: true });
+          }
+          if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+          }
+          
+          // Save files to /tmp
+          fs.writeFileSync(path.join(tempDir, 'background.png'), backgroundBuffer);
+          fs.writeFileSync(path.join(tempDir, 'layer1.png'), layerBuffers[0]);
+          
+          const result = {
+            sessionId,
+            background: `/api/temp/${sessionId}/background.png`,
+            layer1: `/api/temp/${sessionId}/layer1.png`
+          };
+          
+          if (layerBuffers[1]) {
+            fs.writeFileSync(path.join(tempDir, 'layer2.png'), layerBuffers[1]);
+            result.layer2 = `/api/temp/${sessionId}/layer2.png`;
+          }
+          
+          console.log(`Advanced images saved to session: ${sessionId}`);
+          
+          return res.json(result);
+        } catch (err) {
+          console.error('File system error:', err);
+          // Fall back to base64
+          const result = {
+            sessionId,
+            background: `data:image/png;base64,${backgroundBuffer.toString('base64')}`,
+            layer1: `data:image/png;base64,${layerBuffers[0].toString('base64')}`
+          };
+          
+          if (layerBuffers[1]) {
+            result.layer2 = `data:image/png;base64,${layerBuffers[1].toString('base64')}`;
+          }
+          
+          return res.json(result);
         }
-        
-        // Save files
-        fs.writeFileSync(path.join(tempDir, 'background.png'), backgroundBuffer);
-        fs.writeFileSync(path.join(tempDir, 'layer1.png'), layerBuffers[0]);
-        
-        const result = {
-          sessionId,
-          background: `/api/temp/${sessionId}/background.png`,
-          layer1: `/api/temp/${sessionId}/layer1.png`
-        };
-        
-        if (layerBuffers[1]) {
-          fs.writeFileSync(path.join(tempDir, 'layer2.png'), layerBuffers[1]);
-          result.layer2 = `/api/temp/${sessionId}/layer2.png`;
-        }
-        
-        console.log(`Advanced images saved to session: ${sessionId}`);
-        
-        return res.json(result);
       } else {
         // Return ZIP (legacy mode)
         const zip = new JSZip();
